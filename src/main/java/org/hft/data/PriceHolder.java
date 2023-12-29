@@ -8,23 +8,23 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class PriceHolder {
-    private static final int STRIPE_SIZE = 12;
+    // private static final int STRIPE_SIZE = 12;
 
     private final ThreadLocal<Map<String, BigDecimal>> lastSeenPrices;
     private final Map<String, BigDecimal> namesToPrices;
 
-    // private final Map<String, ReentrantReadWriteLock> entityLocks;
+    private final Map<String, ReentrantReadWriteLock> entityLocks;
     // downside of striped lock is that all entities that map to the same lock will share the same condition variable
-    private final ReentrantReadWriteLock[] stripedLocks = new ReentrantReadWriteLock[STRIPE_SIZE];
+    // private final ReentrantReadWriteLock[] stripedLocks = new ReentrantReadWriteLock[STRIPE_SIZE];
 
-    // private final Map<String, Condition> entityConditions;
+    private final Map<String, Condition> entityConditions;
 
     public PriceHolder() {
         namesToPrices = new ConcurrentHashMap<>();
-        // entityLocks = new ConcurrentHashMap<>();
-        // entityConditions = new ConcurrentHashMap<>();
+        entityLocks = new ConcurrentHashMap<>();
+        entityConditions = new ConcurrentHashMap<>();
         lastSeenPrices = ThreadLocal.withInitial(ConcurrentHashMap::new);
-        for (int i = 0; i < STRIPE_SIZE; i++) stripedLocks[i] = new ReentrantReadWriteLock();
+        // for (int i = 0; i < STRIPE_SIZE; i++) stripedLocks[i] = new ReentrantReadWriteLock();
     }
 
     /** Called when a price ‘p’ is received for an entity ‘e’ */
@@ -115,65 +115,54 @@ public class PriceHolder {
 
     public BigDecimal waitForNextPrice(String e) throws InterruptedException {
         ReentrantReadWriteLock lock = getEntityLock(e);
+        lock.writeLock().lock();
 
-        while (true) {
-            BigDecimal currentPrice;
-            BigDecimal lastSeenPrice;
+        try {
+            BigDecimal lastSeenPrice = lastSeenPrices.get().get(e);
+            BigDecimal currentPrice = namesToPrices.get(e);
 
-            // Acquire read lock to read prices
-            lock.readLock().lock();
-            try {
-                currentPrice = namesToPrices.get(e);
-                lastSeenPrice = lastSeenPrices.get().get(e);
-            } finally {
-                lock.readLock().unlock();
-            }
-
-            // Check if the price has changed
-            if (currentPrice != null && !currentPrice.equals(lastSeenPrice)) {
-                // Acquire write lock to update last seen price
-                lock.writeLock().lock();
-                try {
-                    // System.out.println(Thread.currentThread().getName() + " - New price change: oldPrice=" + lastSeenPrice + ", newPrice=" + currentPrice);
-                    lastSeenPrices.get().put(e, currentPrice);
-                    return currentPrice;
-                } finally {
-                    lock.writeLock().unlock();
-                }
-            }
-
-            // Wait for the signal
-            lock.writeLock().lock();
-            try {
-                // System.out.println(Thread.currentThread().getName() + " - waiting for condition to be signalled, giving up write lock...");
-                Condition condition = getLockCondition(e, LockType.WRITE_LOCK);
+            while (currentPrice == null || currentPrice.equals(lastSeenPrice)) {
+                // Wait for a signal that a new price is available
+                Condition condition = lock.writeLock().newCondition();
                 boolean receivedNewPriceSignal = condition.await(3, TimeUnit.SECONDS);
-                // System.out.println(Thread.currentThread().getName() + " - reacquired lock, received signal for new price? -> " + receivedNewPriceSignal);
 
                 if (!receivedNewPriceSignal) {
-                    return currentPrice; // Timeout, return the current price
+                    // Timeout occurred, return the current price
+                    return currentPrice;
                 }
-            } finally {
-                lock.writeLock().unlock();
+
+                // Update currentPrice after the wait
+                currentPrice = namesToPrices.get(e);
             }
+
+            // Update last seen price and return the new price
+            lastSeenPrices.get().put(e, currentPrice);
+            return currentPrice;
+
+        } finally {
+            lock.writeLock().unlock();
         }
     }
 
     private ReentrantReadWriteLock getEntityLock(String e) {
-        return stripedLocks[getStripeIndex(e)];
-        // return entityLocks.computeIfAbsent(e, k -> new ReentrantReadWriteLock(true));
+        // return stripedLocks[getStripeIndex(e)];
+        return entityLocks.computeIfAbsent(e, k -> new ReentrantReadWriteLock(true));
     }
 
+    /*
     private int getStripeIndex(String e) {
         return Math.abs(e.hashCode() % STRIPE_SIZE);
     }
+     */
 
     private Condition getLockCondition(String e, LockType lockType) {
+        /*
         ReentrantReadWriteLock lock = stripedLocks[getStripeIndex(e)];
         if (lockType == LockType.WRITE_LOCK) return lock.writeLock().newCondition();
         else if (lockType == LockType.READ_LOCK) return lock.readLock().newCondition();
         else throw new RuntimeException("Invalid LockType");
-        /*
+         */
+
         return entityConditions.computeIfAbsent(e, k -> {
             if (lockType == LockType.WRITE_LOCK)
                 return entityLocks.get(e).writeLock().newCondition();
@@ -182,7 +171,6 @@ public class PriceHolder {
             else
                 throw new RuntimeException("Invalid LockType");
         });
-         */
     }
 
     private enum LockType {
