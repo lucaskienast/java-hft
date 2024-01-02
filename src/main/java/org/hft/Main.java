@@ -20,6 +20,7 @@ public class Main {
             PriceWaiter priceWaiter = new PriceWaiter(priceHolder, executorService);
             priceWaiter.waitForPrices();
 
+            // todo: start multiple instances of stock exchange order book & matching engine -> for further entities/tickers
             // todo: listen to prices on multiple ports (maybe 1 port per ticker)
             PriceReceiver priceReceiver = new PriceReceiver(priceHolder, executorService);
             priceReceiver.receivePrices();
