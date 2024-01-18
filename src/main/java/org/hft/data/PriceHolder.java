@@ -8,10 +8,12 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class PriceHolder {
-
+    // downside of striped lock is that all entities that map to the same lock will share the same condition variable
+    // should not use exchanger because it is producer consumer relationship
+    // should not use synchronous Q per entity because only 1 thread will be able to wait for producer from put operation.
     private final ThreadLocal<Map<String, BigDecimal>> lastSeenPrices;
     private final Map<String, BigDecimal> namesToPrices;
-    private final Map<String, ReentrantReadWriteLock> entityLocks; // downside of striped lock is that all entities that map to the same lock will share the same condition variable
+    private final Map<String, ReentrantReadWriteLock> entityLocks;
     private final Map<String, Condition> entityConditions;
 
     public PriceHolder() {
@@ -85,6 +87,7 @@ public class PriceHolder {
 
             while (currentPrice == null || currentPrice.equals(lastSeenPrice)) {
                 // Wait for a signal that a new price is available
+                // todo: use getLockCondition here instead of creating new condition
                 Condition condition = lock.writeLock().newCondition();
                 boolean receivedNewPriceSignal = condition.await(3, TimeUnit.SECONDS);
 
